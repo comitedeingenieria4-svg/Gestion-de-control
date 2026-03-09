@@ -1,0 +1,393 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, updateDoc, doc, query, serverTimestamp } from 'firebase/firestore';
+import { 
+  PlusCircle, 
+  ClipboardList, 
+  AlertTriangle, 
+  CheckCircle2, 
+  Clock, 
+  Hotel,
+  Wrench,
+  Zap,
+  Droplets,
+  DoorOpen,
+  Trash2,
+  CalendarClock,
+  PlayCircle,
+  MoreVertical,
+  X
+} from 'lucide-react';
+
+// Firebase Configuration
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'hotel-incidencias-v1';
+
+const CATEGORIES = [
+  { id: 'fontaneria', name: 'Fontanería', icon: Droplets, color: 'text-blue-500' },
+  { id: 'electricidad', name: 'Electricidad', icon: Zap, color: 'text-yellow-500' },
+  { id: 'mobiliario', name: 'Mobiliario', icon: DoorOpen, color: 'text-orange-500' },
+  { id: 'limpieza', name: 'Limpieza', icon: Trash2, color: 'text-green-500' },
+  { id: 'otros', name: 'Otros', icon: Wrench, color: 'text-gray-500' },
+];
+
+const PRIORITIES = [
+  { id: 'baja', name: 'Baja', color: 'bg-blue-100 text-blue-800' },
+  { id: 'media', name: 'Media', color: 'bg-yellow-100 text-yellow-800' },
+  { id: 'alta', name: 'Alta', color: 'bg-red-100 text-red-800' },
+];
+
+const STATUSES = {
+  pending: { label: 'Pendiente', color: 'bg-slate-100 text-slate-600', icon: Clock },
+  in_progress: { label: 'En Ejecución', color: 'bg-blue-100 text-blue-700', icon: PlayCircle },
+  rescheduled: { label: 'Reprogramada', color: 'bg-amber-100 text-amber-700', icon: CalendarClock },
+  completed: { label: 'Completada', color: 'bg-green-100 text-green-700', icon: CheckCircle2 },
+};
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [incidents, setIncidents] = useState([]);
+  const [view, setView] = useState('list'); 
+  const [loading, setLoading] = useState(true);
+  const [editingIncident, setEditingIncident] = useState(null);
+
+  // Form State
+  const [room, setRoom] = useState('');
+  const [category, setCategory] = useState('otros');
+  const [priority, setPriority] = useState('media');
+  const [description, setDescription] = useState('');
+
+  // 1. Auth Setup
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Data Fetching
+  useEffect(() => {
+    if (!user) return;
+
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'incidents'));
+    const unsubscribe = onSnapshot(q, 
+      (snapshot) => {
+        const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const sorted = docs.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+        setIncidents(sorted);
+      },
+      (error) => console.error("Firestore error:", error)
+    );
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!user || !room || !description) return;
+
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'incidents'), {
+        room,
+        category,
+        priority,
+        description,
+        status: 'pending',
+        reportedBy: user.uid,
+        createdAt: serverTimestamp(),
+        lastUpdate: serverTimestamp()
+      });
+      
+      setRoom('');
+      setCategory('otros');
+      setPriority('media');
+      setDescription('');
+      setView('list');
+    } catch (error) {
+      console.error("Error adding document: ", error);
+    }
+  };
+
+  const updateIncidentStatus = async (id, newStatus) => {
+    if (!user) return;
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'incidents', id);
+      await updateDoc(docRef, { 
+        status: newStatus,
+        lastUpdate: serverTimestamp()
+      });
+      setEditingIncident(null);
+    } catch (error) {
+      console.error("Error updating status:", error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
+      {/* Header */}
+      <header className="bg-white border-b sticky top-0 z-20 shadow-sm">
+        <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="bg-blue-600 p-1.5 rounded-lg shadow-inner">
+              <Hotel className="text-white w-5 h-5" />
+            </div>
+            <h1 className="font-bold text-xl tracking-tight hidden sm:block">HotelOps <span className="text-blue-600">Pro</span></h1>
+            <h1 className="font-bold text-xl tracking-tight sm:hidden">Hotel<span className="text-blue-600">Ops</span></h1>
+          </div>
+          <button 
+            onClick={() => setView(view === 'list' ? 'new' : 'list')}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-full transition-all text-sm font-semibold shadow-md active:scale-95"
+          >
+            {view === 'list' ? (
+              <><PlusCircle size={18} /> Nuevo Reporte</>
+            ) : (
+              <><ClipboardList size={18} /> Ver Incidencias</>
+            )}
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto p-4 sm:p-6">
+        {view === 'new' ? (
+          <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6 border-b bg-slate-50/50">
+              <h2 className="text-xl font-bold flex items-center gap-3 text-slate-800">
+                <AlertTriangle className="text-orange-500" size={24} />
+                Nuevo Reporte de Incidencia
+              </h2>
+              <p className="text-slate-500 text-sm mt-1">Completa los detalles para notificar a mantenimiento.</p>
+            </div>
+            <form onSubmit={handleSubmit} className="p-6 sm:p-8 space-y-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-3 uppercase tracking-wider">Habitación / Localización</label>
+                  <input 
+                    type="text" 
+                    required
+                    placeholder="Ej: Suite 405, Ascensor Norte..."
+                    className="w-full px-5 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all text-lg"
+                    value={room}
+                    onChange={(e) => setRoom(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-3 uppercase tracking-wider">Nivel de Prioridad</label>
+                  <div className="flex gap-2">
+                    {PRIORITIES.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setPriority(p.id)}
+                        className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all border-2 ${
+                          priority === p.id 
+                            ? `border-slate-800 bg-slate-800 text-white` 
+                            : 'bg-white text-slate-400 border-slate-100 hover:border-slate-200'
+                        }`}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-4 uppercase tracking-wider">Categoría del Fallo</label>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                  {CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setCategory(cat.id)}
+                      className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all ${
+                        category === cat.id 
+                          ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-100' 
+                          : 'bg-white border-slate-100 text-slate-400 hover:border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <cat.icon size={28} className={category === cat.id ? 'text-white' : cat.color} />
+                      <span className="text-[10px] mt-3 font-black uppercase tracking-widest">{cat.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-3 uppercase tracking-wider">Descripción del problema</label>
+                <textarea 
+                  required
+                  rows="4"
+                  placeholder="Detalla lo sucedido (ej: La manija de la puerta está floja y no cierra con llave)..."
+                  className="w-full px-5 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all resize-none text-slate-700"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                ></textarea>
+              </div>
+
+              <button 
+                type="submit"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-5 rounded-2xl shadow-xl shadow-blue-200 transition-all flex items-center justify-center gap-3 text-lg"
+              >
+                Enviar Orden de Trabajo
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-1">
+              <div>
+                <h2 className="text-2xl font-black text-slate-800 tracking-tight">Panel de Gestión</h2>
+                <p className="text-slate-500 text-sm font-medium">Estado actual de las operaciones en el hotel</p>
+              </div>
+              <div className="flex gap-2">
+                <div className="bg-white px-3 py-1.5 rounded-full border border-slate-200 flex items-center gap-2 shadow-sm">
+                  <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
+                  <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">En vivo</span>
+                </div>
+              </div>
+            </div>
+
+            {incidents.length === 0 ? (
+              <div className="bg-white rounded-3xl p-16 text-center border-2 border-dashed border-slate-200 shadow-inner">
+                <div className="bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <CheckCircle2 className="text-slate-300" size={40} />
+                </div>
+                <h3 className="text-xl font-bold text-slate-700">Sin incidencias pendientes</h3>
+                <p className="text-slate-500 mt-2 max-w-xs mx-auto">El hotel está funcionando al 100%. Haz clic en "Nuevo Reporte" si encuentras algo.</p>
+              </div>
+            ) : (
+              <div className="grid gap-4">
+                {incidents.map((incident) => {
+                  const CategoryIcon = CATEGORIES.find(c => c.id === incident.category)?.icon || Wrench;
+                  const priorityStyle = PRIORITIES.find(p => p.id === incident.priority)?.color;
+                  const statusInfo = STATUSES[incident.status] || STATUSES.pending;
+                  const StatusIcon = statusInfo.icon;
+                  
+                  return (
+                    <div 
+                      key={incident.id}
+                      className={`group relative bg-white rounded-3xl border border-slate-100 p-5 transition-all hover:shadow-xl hover:border-blue-100 flex flex-col sm:flex-row items-start sm:items-center gap-5 ${incident.status === 'completed' ? 'bg-slate-50/50' : ''}`}
+                    >
+                      {/* Categoria Icon */}
+                      <div className={`p-4 rounded-2xl shrink-0 ${incident.status === 'completed' ? 'bg-slate-200 text-slate-400' : 'bg-slate-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors'}`}>
+                        <CategoryIcon size={28} />
+                      </div>
+                      
+                      {/* Info Principal */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                          <h3 className="font-black text-lg text-slate-800 tracking-tight">HAB. {incident.room}</h3>
+                          <span className={`text-[9px] px-2 py-0.5 rounded-md font-black uppercase tracking-widest ${priorityStyle}`}>
+                            {incident.priority}
+                          </span>
+                        </div>
+                        <p className="text-slate-600 font-medium mb-3 text-sm leading-relaxed">{incident.description}</p>
+                        
+                        <div className="flex items-center gap-4 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                          <span className="flex items-center gap-1.5">
+                            <Clock size={14} className="text-slate-300" />
+                            {incident.createdAt ? new Date(incident.createdAt.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '...'}
+                          </span>
+                          <span className={`flex items-center gap-1.5 px-2 py-1 rounded-lg ${statusInfo.color}`}>
+                            <StatusIcon size={14} />
+                            {statusInfo.label}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Botones de Acción / Cambio de Estado */}
+                      <div className="w-full sm:w-auto flex sm:flex-col gap-2 pt-4 sm:pt-0 border-t sm:border-0 border-slate-100">
+                        <div className="flex gap-2 w-full justify-end">
+                          {incident.status !== 'completed' && (
+                            <div className="flex gap-1.5">
+                              {/* Botón Ejecutar */}
+                              {incident.status !== 'in_progress' && (
+                                <button 
+                                  onClick={() => updateIncidentStatus(incident.id, 'in_progress')}
+                                  className="flex items-center gap-1.5 bg-blue-50 text-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                                >
+                                  <PlayCircle size={14} /> Ejecutar
+                                </button>
+                              )}
+                              
+                              {/* Botón Reprogramar */}
+                              {incident.status !== 'rescheduled' && (
+                                <button 
+                                  onClick={() => updateIncidentStatus(incident.id, 'rescheduled')}
+                                  className="flex items-center gap-1.5 bg-amber-50 text-amber-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-amber-600 hover:text-white transition-all shadow-sm"
+                                >
+                                  <CalendarClock size={14} /> Reprogramar
+                                </button>
+                              )}
+                              
+                              {/* Botón Completar */}
+                              <button 
+                                onClick={() => updateIncidentStatus(incident.id, 'completed')}
+                                className="flex items-center gap-1.5 bg-green-50 text-green-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-green-600 hover:text-white transition-all shadow-sm"
+                              >
+                                <CheckCircle2 size={14} /> Listo
+                              </button>
+                            </div>
+                          )}
+                          
+                          {/* Reabrir si está completada */}
+                          {incident.status === 'completed' && (
+                            <button 
+                              onClick={() => updateIncidentStatus(incident.id, 'pending')}
+                              className="bg-slate-200 text-slate-500 px-4 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-slate-300 transition-all"
+                            >
+                              Reabrir Ticket
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* Floating Status Indicator (Solo móvil) */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md text-white px-6 py-3 rounded-full flex items-center gap-6 shadow-2xl z-30 sm:hidden">
+        <div className="flex flex-col items-center">
+          <span className="text-blue-400 font-black text-sm">{incidents.filter(i => i.status !== 'completed').length}</span>
+          <span className="text-[8px] font-bold uppercase text-slate-400">Activas</span>
+        </div>
+        <div className="w-px h-6 bg-slate-700"></div>
+        <div className="flex flex-col items-center">
+          <span className="text-green-400 font-black text-sm">{incidents.filter(i => i.status === 'completed').length}</span>
+          <span className="text-[8px] font-bold uppercase text-slate-400">Listas</span>
+        </div>
+      </div>
+    </div>
+  );
+}
